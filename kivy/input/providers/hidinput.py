@@ -115,6 +115,8 @@ else:
     MSC_MAX = 0x07
     MSC_CNT = (MSC_MAX + 1)
 
+    ABS_ST_POSITION_Y = 0x00   # Single-touch Y position
+    ABS_ST_POSITION_X = 0x01   # Single-touch X position
     ABS_MT_TOUCH_MAJOR = 0x30  # Major axis of touching ellipse
     ABS_MT_TOUCH_MINOR = 0x31  # Minor axis (omit if circular)
     ABS_MT_WIDTH_MAJOR = 0x32  # Major axis of approaching ellipse
@@ -312,6 +314,46 @@ else:
                                 point['id'] += 1
                                 point['_avoid'] = True
 
+            def process_as_singletouch(tv_sec, tv_usec, ev_type, ev_code, ev_value):
+
+                if ev_type == EV_SYN:
+                    if ev_code == SYN_REPORT:
+                        process([point])
+
+                elif ev_type == EV_ABS:
+                    if ev_code == ABS_ST_POSITION_X:
+                        val = normalize(ev_value,
+                                        range_min_position_x,
+                                        range_max_position_x)
+                        if invert_x:
+                            val = 1. - val
+                        point['x'] = val
+                    elif ev_code == ABS_ST_POSITION_Y:
+                        val = 1. - normalize(ev_value,
+                                             range_min_position_y,
+                                             range_max_position_y)
+                        if invert_y:
+                            val = 1. - val
+                        point['y'] = val
+
+                elif ev_type == EV_KEY:
+                    buttons = {
+                        330: 'left'
+                              }
+
+                    if ev_code in buttons.keys():
+                        if ev_value:
+                            if 'button' not in point:
+                                point['button'] = buttons[ev_code]
+                                point['id'] += 1
+                                if '_avoid' in point:
+                                    del point['_avoid']
+                        elif 'button' in point:
+                            if point['button'] == buttons[ev_code]:
+                                del point['button']
+                                point['id'] += 1
+                                point['_avoid'] = True
+
             def process(points):
                 if not is_multitouch:
                     Window.mouse_pos = points[0]['x'] * Window.width, points[0]['y'] * Window.height
@@ -362,6 +404,7 @@ else:
             bit = fcntl.ioctl(fd, EVIOCGBIT + (EV_MAX << 16), ' ' * sz_l)
             bit, = struct.unpack('Q', bit)
             is_multitouch = False
+            is_singletouch = False
             for x in range(EV_MAX):
                 # preserve this, we may want other things than EV_ABS
                 if x != EV_ABS:
@@ -381,7 +424,21 @@ else:
                                           ' ' * struct_input_absinfo_sz)
                     abs_value, abs_min, abs_max, abs_fuzz, \
                         abs_flat, abs_res = struct.unpack('iiiiii', absinfo)
-                    if y == ABS_MT_POSITION_X:
+                    if y == ABS_ST_POSITION_X:
+                        is_singletouch = True
+                        range_min_position_x = drs('min_position_x', abs_min)
+                        range_max_position_x = drs('max_position_x', abs_max)
+                        Logger.info('HIDMotionEvent: ' +
+                                    '<%s> range position X is %d - %d' % (
+                                        device_name, abs_min, abs_max))
+                    elif y == ABS_ST_POSITION_Y:
+                        is_singletouch = True
+                        range_min_position_y = drs('min_position_y', abs_min)
+                        range_max_position_y = drs('max_position_y', abs_max)
+                        Logger.info('HIDMotionEvent: ' +
+                                    '<%s> range position Y is %d - %d' % (
+                                        device_name, abs_min, abs_max))
+                    elif y == ABS_MT_POSITION_X:
                         is_multitouch = True
                         range_min_position_x = drs('min_position_x', abs_min)
                         range_max_position_x = drs('max_position_x', abs_max)
@@ -422,6 +479,8 @@ else:
 
                     if is_multitouch:
                         process_as_multitouch(*infos)
+                    elif is_singletouch:
+                        process_as_singletouch(*infos)
                     else:
                         process_as_mouse(*infos)
 
