@@ -426,7 +426,7 @@ class ConfigParser(PythonConfigParser, object):
         return True
 
     @staticmethod
-    def _register_named_property(name, widget_ref):
+    def _register_named_property(name, widget_ref, ignored=None):
         ''' Called by the ConfigParserProperty to register a property which
         was created with a config name instead of a config object.
 
