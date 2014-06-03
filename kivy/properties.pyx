@@ -191,6 +191,7 @@ __all__ = ('Property',
 include "graphics/config.pxi"
 
 from weakref import ref
+import collections
 from kivy.compat import string_types
 from kivy.config import ConfigParser
 from functools import partial
@@ -627,6 +628,109 @@ cdef class ListProperty(Property):
 
     cpdef set(self, EventDispatcher obj, value):
         value = ObservableList(self, obj, value)
+        Property.set(self, obj, value)
+
+cdef inline void observable_deque_dispatch(object self):
+    cdef Property prop = self.prop
+    obj = self.obj()
+    if obj is not None:
+        prop.dispatch(obj)
+
+
+class ObservableDeque(collections.deque):
+    # Internal class to observe changes inside a native python deque.
+    def __init__(self, *largs):
+        self.prop = largs[0]
+        self.obj = ref(largs[1])
+        super(ObservableDeque, self).__init__(*largs[2:])
+
+    def __setitem__(self, key, value):
+        collections.deque.__setitem__(self, key, value)
+        observable_deque_dispatch(self)
+
+    def __delitem__(self, key):
+        collections.deque.__delitem__(self, key)
+        observable_deque_dispatch(self)
+
+    def __setslice__(self, *largs):
+        collections.deque.__setslice__(self, *largs)
+        observable_deque_dispatch(self)
+
+    def __delslice__(self, *largs):
+        collections.deque.__delslice__(self, *largs)
+        observable_deque_dispatch(self)
+
+    def __iadd__(self, *largs):
+        collections.deque.__iadd__(self, *largs)
+        observable_deque_dispatch(self)
+
+    def __imul__(self, *largs):
+        collections.deque.__imul__(self, *largs)
+        observable_deque_dispatch(self)
+
+    def append(self, *largs):
+        collections.deque.append(self, *largs)
+        observable_deque_dispatch(self)
+
+    def remove(self, *largs):
+        collections.deque.remove(self, *largs)
+        observable_deque_dispatch(self)
+
+    def insert(self, *largs):
+        collections.deque.insert(self, *largs)
+        observable_deque_dispatch(self)
+
+    def pop(self, *largs):
+        cdef object result = collections.deque.pop(self, *largs)
+        observable_deque_dispatch(self)
+        return result
+    
+    def popleft(self, *largs):
+        cdef object result = collections.deque.popleft(self, *largs)
+        observable_deque_dispatch(self)
+        return result
+
+    def extend(self, *largs):
+        collections.deque.extend(self, *largs)
+        observable_deque_dispatch(self)
+
+    def sort(self, *largs):
+        collections.deque.sort(self, *largs)
+        observable_deque_dispatch(self)
+
+    def reverse(self, *largs):
+        collections.deque.reverse(self, *largs)
+        observable_deque_dispatch(self)
+
+
+cdef class DequeProperty(Property):
+    '''Property that represents a list.
+
+    :Parameters:
+        `default`: list, defaults to []
+            Specifies the default value of the property.
+
+    '''
+    def __init__(self, defaultvalue=None, **kw):
+        defaultvalue = defaultvalue or collections.deque()
+
+        super(DequeProperty, self).__init__(defaultvalue, **kw)
+
+    cpdef link(self, EventDispatcher obj, str name):
+        Property.link(self, obj, name)
+        cdef PropertyStorage ps = obj.__storage[self._name]
+        ps.value = ObservableDeque(self, obj, ps.value)
+
+    cdef check(self, EventDispatcher obj, value):
+        if Property.check(self, obj, value):
+            return True
+        if type(value) is not ObservableDeque:
+            raise ValueError('%s.%s accept only ObservableDeque' % (
+                obj.__class__.__name__,
+                self.name))
+
+    cpdef set(self, EventDispatcher obj, value):
+        value = ObservableDeque(self, obj, value)
         Property.set(self, obj, value)
 
 cdef inline void observable_dict_dispatch(object self):
@@ -1531,8 +1635,7 @@ cdef class ConfigParserProperty(Property):
             #self.dispatch(obj)  # we need to dispatch, so not overwitten
         elif self.config_name:
             # ConfigParser will set_config when one named config is created
-            Clock.schedule_once(partial(ConfigParser._register_named_property,
-            self.config_name, (self.obj, self.name)), 0)
+            Clock.schedule_once(partial(ConfigParser._register_named_property, self.config_name, (self.obj, self.name)))
 
     cpdef _edit_setting(self, section, key, value):
         # callback of ConfigParser
