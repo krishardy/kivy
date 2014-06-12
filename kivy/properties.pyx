@@ -638,7 +638,7 @@ cdef inline void observable_deque_dispatch(object self):
 
 
 class ObservableDeque(collections.deque):
-    # Internal class to observe changes inside a native python deque.
+    # Internal class to observe changes inside a python collections.deque.
     def __init__(self, *largs):
         self.prop = largs[0]
         self.obj = ref(largs[1])
@@ -671,13 +671,25 @@ class ObservableDeque(collections.deque):
     def append(self, *largs):
         collections.deque.append(self, *largs)
         observable_deque_dispatch(self)
-
-    def remove(self, *largs):
-        collections.deque.remove(self, *largs)
+        
+    def appendleft(self, *largs):
+        collections.deque.appendleft(self, *largs)
+        observable_deque_dispatch(self)        
+        
+    def clear(self, *largs):
+        collections.deque.clear(self, *largs)
+        observable_deque_dispatch(self)
+        
+    def count(self, *largs):
+        collections.deque.count(self, *largs)
         observable_deque_dispatch(self)
 
-    def insert(self, *largs):
-        collections.deque.insert(self, *largs)
+    def extend(self, *largs):
+        collections.deque.extend(self, *largs)
+        observable_deque_dispatch(self)
+
+    def extendleft(self, *largs):
+        collections.deque.extendleft(self, *largs)
         observable_deque_dispatch(self)
 
     def pop(self, *largs):
@@ -690,13 +702,13 @@ class ObservableDeque(collections.deque):
         observable_deque_dispatch(self)
         return result
 
-    def extend(self, *largs):
-        collections.deque.extend(self, *largs)
+    def remove(self, *largs):
+        collections.deque.remove(self, *largs)
         observable_deque_dispatch(self)
-
-    def sort(self, *largs):
-        collections.deque.sort(self, *largs)
-        observable_deque_dispatch(self)
+        
+    def rotate(self, *largs):
+        collections.deque.rotate(self, *largs)
+        observable_deque_dispatch(self)        
 
     def reverse(self, *largs):
         collections.deque.reverse(self, *largs)
@@ -704,7 +716,7 @@ class ObservableDeque(collections.deque):
 
 
 cdef class DequeProperty(Property):
-    '''Property that represents a list.
+    '''Property that represents a collections.deque.
 
     :Parameters:
         `default`: list, defaults to []
