@@ -276,6 +276,14 @@ class SettingItem(FloatLayout):
     :attr:`selected_alpha` is a :class:`~kivy.properties.NumericProperty` and
     defaults to 0.
     '''
+    
+    keyboard_layout = StringProperty(None)
+    '''(internal) The keyboard layout to use when the setting TextInput is
+    shown.
+    
+    :attr:`keyboard_layout` is a :class:`~kivy.properties.StringProperty` and
+    defaults to None.
+    '''
 
     __events__ = ('on_release', )
 
@@ -393,6 +401,8 @@ class SettingString(SettingItem):
             text=self.value, font_size='24sp', multiline=False,
             size_hint_y=None, height='42sp')
         textinput.bind(on_text_validate=self._validate)
+        # TODO: set _keyboard_layout from the settings json file
+        textinput._keyboard_layout = self.keyboard_layout
         self.textinput = textinput
 
         # construct the content, widget are used as a spacer
@@ -942,6 +952,7 @@ class Settings(BoxLayout):
         uid = panel.uid
         if self.interface is not None:
             self.interface.add_panel(panel, title, uid)
+        return panel
 
     def create_json_panel(self, title, config, filename=None, data=None):
         '''Create new :class:`SettingsPanel`.
@@ -1195,6 +1206,17 @@ class MenuSidebar(FloatLayout):
         for button in self.buttons_layout.children:
             if button.uid != self.selected_uid:
                 button.selected = False
+                
+    def set_selected_uid(self, uid):
+        '''Changes the selected panel to the one with the given panel uid.
+        
+        :param uid: The name (an int) of the panel.  It should be used
+        internally to represent the panel and used to set self.selected_uid
+        when the panel is changed.
+        '''
+        for button in self.buttons_layout.children:
+            button.selected = True if button.uid == uid else False
+        self.selected_uid = uid
 
 
 class SettingSidebarLabel(Label):

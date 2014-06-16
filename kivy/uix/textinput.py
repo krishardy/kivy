@@ -341,6 +341,7 @@ class TextInput(Widget):
         self._line_options = None
         self._keyboard = None
         self._keyboard_mode = Config.get('kivy', 'keyboard_mode')
+        self._keyboard_layout = kwargs.get("keyboard_layout", None)
         self._command_mode = False
         self._command = ''
         self.reset_undo()
@@ -1311,10 +1312,13 @@ class TextInput(Widget):
 
         if not _is_desktop and not editable:
             return
-
         keyboard = win.request_keyboard(
             self._keyboard_released, self, input_type=self.input_type)
         self._keyboard = keyboard
+        if keyboard.widget:
+            # We are using a virtual keyboard
+            if self._keyboard_layout:
+                keyboard.widget.layout = self._keyboard_layout
         if editable:
             keyboard.bind(
                 on_key_down=self._keyboard_on_key_down,
