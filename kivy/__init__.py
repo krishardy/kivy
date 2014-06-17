@@ -222,7 +222,7 @@ kivy_shader_dir = join(kivy_data_dir, 'glsl')
 #: Kivy icons config path (don't remove the last '')
 kivy_icons_dir = join(kivy_data_dir, 'icons', '')
 #: Kivy user-home storage directory
-kivy_home_dir = ''
+kivy_home_dir = environ.get('KIVY_HOME_DIR', '')
 #: Kivy configuration filename
 kivy_config_fn = ''
 #: Kivy user modules directory
@@ -248,7 +248,8 @@ if not environ.get('KIVY_DOC_INCLUDE'):
         user_home_dir = environ['ANDROID_APP_PATH']
     elif platform == 'ios':
         user_home_dir = join(expanduser('~'), 'Documents')
-    kivy_home_dir = join(user_home_dir, '.kivy')
+    if kivy_home_dir == '':
+        kivy_home_dir = join(user_home_dir, '.kivy')
     kivy_config_fn = join(kivy_home_dir, 'config.ini')
     kivy_usermodules_dir = join(kivy_home_dir, 'mods')
     kivy_userexts_dir = join(kivy_home_dir, 'extensions')
