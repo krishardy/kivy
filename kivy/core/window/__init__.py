@@ -1,4 +1,5 @@
 # pylint: disable=W0611
+# coding: utf-8
 '''
 Window
 ======
@@ -79,23 +80,32 @@ class Keyboard(EventDispatcher):
         'numpadadd': 270,
 
         # F1-15
-        'f1': 282, 'f2': 283, 'f3': 282, 'f4': 285, 'f5': 286, 'f6': 287,
+        'f1': 282, 'f2': 283, 'f3': 284, 'f4': 285, 'f5': 286, 'f6': 287,
         'f7': 288, 'f8': 289, 'f9': 290, 'f10': 291, 'f11': 292, 'f12': 293,
         'f13': 294, 'f14': 295, 'f15': 296,
 
         # other keys
         '(': 40, ')': 41,
         '[': 91, ']': 93,
-        '{': 91, '}': 93,
+        '{': 123, '}': 125,
         ':': 59, ';': 59,
-        '=': 43, '+': 43,
-        '-': 41, '_': 41,
-        '/': 47, '?': 47,
-        '`': 96, '~': 96,
-        '\\': 92, '|': 92,
-        '"': 34, '\'': 39,
+        '=': 61, '+': 43,
+        '-': 45, '_': 95,
+        '/': 47, '*': 42,
+        '?': 47,
+        '`': 96, '~': 126,
+        '´': 180, '¦': 166,
+        '\\': 92, '|': 124,
+        '"': 34, "'": 39,
         ',': 44, '.': 46,
-        '<': 60, '>': 60,
+        '<': 60, '>': 62,
+        '@': 64, '!': 33,
+        '#': 35, '$': 36,
+        '%': 37, '^': 94,
+        '&': 38, '¬': 172,
+        '¨': 168, '…': 8230,
+        'ù': 249, 'à': 224,
+        'é': 233, 'è': 232,
     }
 
     __events__ = ('on_key_down', 'on_key_up')
@@ -232,7 +242,7 @@ class WindowBase(EventDispatcher):
         `on_dropfile`: str
             Fired when a file is dropped on the application.
 
-        .. versionchanged:: 1.8.1
+        .. versionchanged:: 1.9.0
             `on_request_close` has been added.
     '''
 
@@ -345,9 +355,10 @@ class WindowBase(EventDispatcher):
     def _get_height(self):
         '''Rotated window height'''
         r = self._rotation
+        kb = self.keyboard_height if self.softinput_mode == 'resize' else 0
         if r == 0 or r == 180:
-            return self._size[1]
-        return self._size[0]
+            return self._size[1] - kb
+        return self._size[0] - kb
 
     height = AliasProperty(_get_height, None, bind=('_rotation', '_size'))
     '''Rotated window height.
@@ -387,9 +398,18 @@ class WindowBase(EventDispatcher):
 
     softinput_mode = OptionProperty('', options=('', 'pan', 'scale', 'resize'))
     '''This specifies the behavior of window contents on display of soft
-    keyboard on mobile platform.
-
-    ..versionadded::1.8.1
+    keyboard on mobile platform. Can be one of '', 'pan', 'scale', 'resize'.
+    
+    When '' The main window is left as it is allowing the user to use
+    :attr:`keyboard_height` to manage the window contents the way they want.
+    
+    when 'pan' The main window pans moving the bottom part of the window to be
+    always on top of the keyboard.
+    
+    when 'resize' The window is resized and the contents scaled to fit the
+    remaining space.
+    
+    ..versionadded::1.9.0
 
     :attr:`softinput_mode` is a :class:`OptionProperty` defaults to None.
 
@@ -421,7 +441,7 @@ class WindowBase(EventDispatcher):
     '''Rerturns the height of the softkeyboard/IME on mobile platforms.
     Will return 0 if not on mobile platform or if IME is not active.
 
-    ..versionadded:: 1.8.1
+    ..versionadded:: 1.9.0
 
     :attr:`keyboard_height` is a read-only :class:`AliasProperty` defaults to 0.
     '''
@@ -454,6 +474,10 @@ class WindowBase(EventDispatcher):
 
     .. versionadded:: 1.2.0
     '''
+
+    @property
+    def __self__(self):
+        return self
 
     top = NumericProperty(None, allownone=True)
     left = NumericProperty(None, allownone=True)
@@ -606,7 +630,7 @@ class WindowBase(EventDispatcher):
             # if we get initialized more than once, then reload opengl state
             # after the second time.
             # XXX check how it's working on embed platform.
-            if platform == 'linux':
+            if platform == 'linux' or Window.__class__.__name__ == 'WindowSDL':
                 # on linux, it's safe for just sending a resize.
                 self.dispatch('on_resize', *self.system_size)
 
@@ -725,7 +749,7 @@ class WindowBase(EventDispatcher):
     def on_touch_down(self, touch):
         '''Event called when a touch down event is initiated.
 
-        .. versionchanged:: 1.8.1
+        .. versionchanged:: 1.9.0
             The touch `pos` is now transformed to window coordinates before
             this method is called. Before, the touch `pos` coordinate would be
             `(0, 0)` when this method was called.
@@ -737,7 +761,7 @@ class WindowBase(EventDispatcher):
     def on_touch_move(self, touch):
         '''Event called when a touch event moves (changes location).
 
-        .. versionchanged:: 1.8.1
+        .. versionchanged:: 1.9.0
             The touch `pos` is now transformed to window coordinates before
             this method is called. Before, the touch `pos` coordinate would be
             `(0, 0)` when this method was called.
@@ -749,7 +773,7 @@ class WindowBase(EventDispatcher):
     def on_touch_up(self, touch):
         '''Event called when a touch event is released (terminated).
 
-        .. versionchanged:: 1.8.1
+        .. versionchanged:: 1.9.0
             The touch `pos` is now transformed to window coordinates before
             this method is called. Before, the touch `pos` coordinate would be
             `(0, 0)` when this method was called.
@@ -898,7 +922,7 @@ class WindowBase(EventDispatcher):
         # Quit if user presses ESC or the typical OSX shortcuts CMD+q or CMD+w
         # TODO If just CMD+w is pressed, only the window should be closed.
         is_osx = platform == 'darwin'
-        if self.on_keyboard.exit_on_escape:
+        if WindowBase.on_keyboard.exit_on_escape:
             if key == 27 or all([is_osx, key in [113, 119], modifier == 1024]):
                 if not self.dispatch('on_request_close', source='keyboard'):
                     stopTouchApp()
@@ -1076,6 +1100,13 @@ class WindowBase(EventDispatcher):
             :class:`~kivy.uix.vkeyboard.VKeyboard` instance attached as a
             *.widget* property.
 
+        .. note::
+
+            The behavior of this function is heavily influenced by the current
+            `keyboard_mode`. Please see the Config's
+            :ref:`configuration tokens <configuration-tokens>` section for
+            more information.
+
         '''
 
         # release any previous keyboard attached.
@@ -1162,5 +1193,6 @@ Window = core_select_lib('window', (
     ('egl_rpi', 'window_egl_rpi', 'WindowEglRpi'),
     ('pygame', 'window_pygame', 'WindowPygame'),
     ('sdl', 'window_sdl', 'WindowSDL'),
+    ('sdl2', 'window_sdl2', 'WindowSDL'),
     ('x11', 'window_x11', 'WindowX11'),
 ), True)

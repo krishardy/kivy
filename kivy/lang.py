@@ -207,7 +207,9 @@ In the latter case, multiple single line statements are valid including
 multi-line statements that escape their newline, as long as they don't
 add an indentation level.
 
-Examples of valid statements are::
+Examples of valid statements are:
+
+.. code-block:: python
 
     on_press: if self.state == 'normal': print('normal')
     on_state:
@@ -219,7 +221,9 @@ Examples of valid statements are::
         print([1,2,3,4,
         5,6,7])
 
-An example of a invalid statement::
+An example of a invalid statement:
+
+.. code-block:: python
 
     on_state:
         if self.state == 'normal':
@@ -681,7 +685,7 @@ Set a key that will be available anywhere in the kv. For example:
 include <file>
 ~~~~~~~~~~~~~~~~
 
-.. versionadded:: 1.8.1
+.. versionadded:: 1.9.0
 
 Syntax:
 
@@ -734,13 +738,15 @@ __all__ = ('Observable', 'Builder', 'BuilderBase', 'BuilderException', 'Parser',
 import codecs
 import re
 import sys
+import traceback
 from re import sub, findall
 from os import environ
 from os.path import join
 from copy import copy
 from types import CodeType
 from functools import partial
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
+
 from kivy.factory import Factory
 from kivy.logger import Logger
 from kivy.utils import QueryDict
@@ -749,8 +755,8 @@ from kivy import kivy_data_dir, require
 from kivy.compat import PY2, iteritems, iterkeys
 from kivy.context import register_context
 from kivy.resources import resource_find
-from kivy.event import EventDispatcher
 import kivy.metrics as Metrics
+from kivy._event import Observable, EventDispatcher
 
 
 trace = Logger.trace
@@ -771,30 +777,10 @@ lang_key = re.compile('([a-zA-Z_]+)')
 lang_keyvalue = re.compile('([a-zA-Z_][a-zA-Z0-9_.]*\.[a-zA-Z0-9_.]+)')
 lang_tr = re.compile('(_\()')
 
-# delayed calls are canvas expression triggered during an loop
-_delayed_calls = []
 
 # all the widget handlers, used to correctly unbind all the callbacks then the
 # widget is deleted
-_handlers = {}
-
-
-class Observable(object):
-    '''A lightweight class allowing to get an object be bound to action
-    in kv, without using as much resources as EventDispatcher
-
-    .. versionadded:: 1.8.1
-    '''
-
-    def bind(self, **kwargs):
-        '''This method is to be overriden by your subclass
-
-        kwargs will contains callables to call when your observables are
-        updated, so you can trigger a reevaluation of the expression
-        when you need it, just calling all the callbacks that are
-        relevant.
-        '''
-        pass
+_handlers = defaultdict(list)
 
 
 class ProxyApp(object):
@@ -852,11 +838,18 @@ global_idmap['dp'] = Metrics.dp
 global_idmap['sp'] = Metrics.sp
 
 
+# delayed calls are canvas expression triggered during an loop. It is one
+# directional linked list of args to call call_fn with. Each element is a list
+# whos last element points to the next list of args to execute when
+# Builder.sync is called.
+_delayed_start = None
+
+
 class ParserException(Exception):
     '''Exception raised when something wrong happened in a kv file.
     '''
 
-    def __init__(self, context, line, message):
+    def __init__(self, context, line, message, cause=None):
         self.filename = context.filename or '<inline>'
         self.line = line
         sourcecode = context.sourcecode
@@ -873,6 +866,9 @@ class ParserException(Exception):
 
         message = 'Parser: File "%s", line %d:\n%s\n%s' % (
             self.filename, self.line + 1, sc, message)
+        if cause:
+            message += '\n' + ''.join(traceback.format_tb(cause))
+
         super(ParserException, self).__init__(message)
 
 
@@ -1419,54 +1415,189 @@ def custom_callback(__kvlang__, idmap, *largs, **kwargs):
     exec(__kvlang__.co_value, idmap)
 
 
+def call_fn(args, instance, v):
+    element, key, value, rule, idmap = args
+    if __debug__:
+        trace('Builder: call_fn %s, key=%s, value=%r, %r' % (
+            element, key, value, rule.value))
+    rule.count += 1
+    e_value = eval(value, idmap)
+    if __debug__:
+        trace('Builder: call_fn => value=%r' % (e_value, ))
+    setattr(element, key, e_value)
+
+
+def delayed_call_fn(args, instance, v):
+    # it's already on the list
+    if args[-1] is not None:
+        return
+
+    global _delayed_start
+    if _delayed_start is None:
+        _delayed_start = args
+        args[-1] = StopIteration
+    else:
+        args[-1] = _delayed_start
+        _delayed_start = args
+
+
+def update_intermediates(base, keys, bound, s, fn, args, instance, value):
+    ''' Function that is called when an intermediate property is updated
+    and `rebind` of that property is True. In that case, we unbind
+    all bound funcs that were bound to attrs of the old value of the
+    property and rebind to the new value of the property.
+
+    For example, if the rule is `self.a.b.c.d`, then when b is changed, we
+    unbind from `b`, `c` and `d`, if they were bound before (they were not
+    None and `rebind` of the respective properties was True) and we rebind
+    to the new values of the attrs `b`, `c``, `d` that are not None and
+    `rebind` is True.
+
+    :Parameters:
+        `base`
+            A (proxied) ref to the base widget, `self` in the example
+            above.
+        `keys`
+            A list of the name off the attrs of `base` being watched. In
+            the example above it'd be `['a', 'b', 'c', 'd']`.
+        `bound`
+            A list 3-tuples, each tuple being (widget, attr, callback)
+            representing callback functions bound to the attributed `attr`
+            of `widget`. The callback maybe be None, in which case the attr
+            was not bound, but is there to be able to walk the attr tree.
+            E.g. in the example above, if `b` was not an eventdispatcher,
+            `(_b_ref_, `c`, None)` would be added to the list so we can get
+            to `c` and `d`, which may be eventdispatchers and their attrs.
+        `s`
+            The index in `keys` of the of the attr that needs to be
+            updated. That is all the keys from `s` and further will be
+            rebound, since the `s` key was changed. In bound, the
+            corresponding index is `s - 1`. If `s` is None, we start from
+            1 (first attr).
+        `fn`
+            The function to be called args, `args` on bound callback.
+    '''
+    # first remove all the old bound functions from `s` and down.
+    j = s - 1
+    for f, k, fun, largs in bound[j:]:
+        if fun is None:
+            continue
+        try:
+            f.fast_unbind(k, fun, *largs)
+        except ReferenceError:
+            pass
+    del bound[j:]
+
+    # find the first attr from which we need to start rebinding.
+    if len(bound):
+        f = bound[-1][0]
+    else:  # if it's the very first attr, we start with the base.
+        f = base
+    append = bound.append
+
+    # bind all attrs, except last to update_intermediates
+    for val in keys[s:-1]:
+        # if we need to dynamically rebind, bindm otherwise just
+        # add the attr to the list
+        if isinstance(f, (EventDispatcher, Observable)):
+            prop = f.property(val, True)
+            if prop is not None and getattr(prop, 'rebind', False):
+                # fast_bind should not dispatch, otherwise
+                # update_intermediates might be called in the middle
+                # here messing things up
+                f.fast_bind(val, update_intermediates, base, keys, bound, s,
+                            fn, args)
+                append([f.proxy_ref, val, update_intermediates,
+                        (base, keys, bound, s, fn, args)])
+            else:
+                append([f.proxy_ref, val, None, ()])
+        else:
+            append([getattr(f, 'proxy_ref', f), val, None, ()])
+
+        f = getattr(f, val, None)
+        if f is None:
+            break
+        s += 1
+
+    # for the last attr we bind directly to the setting function,
+    # because that attr sets the value of the rule.
+    if isinstance(f, (EventDispatcher, Observable)):
+        if f.fast_bind(keys[-1], fn, args):
+            append([f.proxy_ref, keys[-1], fn, (args, )])
+    # when we rebind we have to update the
+    # rule with the most recent value, otherwise, the value might be wrong
+    # and wouldn't be updated since we might not have tracked it before.
+    # This only happens for a callback when rebind was True for the prop.
+    fn(args, None, None)
+
+
 def create_handler(iself, element, key, value, rule, idmap, delayed=False):
-    locals()['__kvlang__'] = rule
-
-    # create an handler
-    uid = iself.uid
-    if uid not in _handlers:
-        _handlers[uid] = []
-
     idmap = copy(idmap)
     idmap.update(global_idmap)
     idmap['self'] = iself.proxy_ref
+    handler_append = _handlers[iself.uid].append
 
-    def call_fn(*args):
-        if __debug__:
-            trace('Builder: call_fn %s, key=%s, value=%r, %r' % (
-                element, key, value, rule.value))
-        rule.count += 1
-        e_value = eval(value, idmap)
-        if __debug__:
-            trace('Builder: call_fn => value=%r' % (e_value, ))
-        setattr(element, key, e_value)
-
-    def delayed_call_fn(*args):
-        _delayed_calls.append(call_fn)
-
-    fn = delayed_call_fn if delayed else call_fn
+    # we need a hash for when delayed, so we don't execute duplicate canvas
+    # callbacks from the same handler during a sync op
+    if delayed:
+        fn = delayed_call_fn
+        args = [element, key, value, rule, idmap, None]  # see _delayed_start
+    else:
+        fn = call_fn
+        args = (element, key, value, rule, idmap)
 
     # bind every key.value
     if rule.watched_keys is not None:
-        for k in rule.watched_keys:
-            try:
-                f = idmap[k[0]]
-                for x in k[1:-1]:
-                    f = getattr(f, x)
-                if isinstance(f, (Observable, EventDispatcher)):
-                    f.bind(**{k[-1]: fn})
-                    # make sure _handlers doesn't keep widgets alive
-                    _handlers[uid].append([get_proxy(f), k[-1], fn])
-            except KeyError:
+        for keys in rule.watched_keys:
+            base = idmap.get(keys[0])
+            if base is None:
                 continue
-            except AttributeError:
-                continue
+            f = base = getattr(base, 'proxy_ref', base)
+            bound = []
+            was_bound = False
+            append = bound.append
+
+            # bind all attrs, except last to update_intermediates
+            k = 1
+            for val in keys[1:-1]:
+                # if we need to dynamically rebind, bindm otherwise
+                # just add the attr to the list
+                if isinstance(f, (EventDispatcher, Observable)):
+                    prop = f.property(val, True)
+                    if prop is not None and getattr(prop, 'rebind', False):
+                        # fast_bind should not dispatch, otherwise
+                        # update_intermediates might be called in the middle
+                        # here messing things up
+                        f.fast_bind(val, update_intermediates, base, keys,
+                                    bound, k, fn, args)
+                        append([f.proxy_ref, val, update_intermediates,
+                                (base, keys, bound, k, fn, args)])
+                        was_bound = True
+                    else:
+                        append([f.proxy_ref, val, None, ()])
+                else:
+                    append([getattr(f, 'proxy_ref', f), val, None, ()])
+                f = getattr(f, val, None)
+                if f is None:
+                    break
+                k += 1
+
+            # for the last attr we bind directly to the setting
+            # function, because that attr sets the value of the rule.
+            if isinstance(f, (EventDispatcher, Observable)):
+                if f.fast_bind(keys[-1], fn, args):  # f is not None
+                    append([f.proxy_ref, keys[-1], fn, (args, )])
+                    was_bound = True
+            if was_bound:
+                handler_append(bound)
 
     try:
         return eval(value, idmap)
     except Exception as e:
+        tb = sys.exc_info()[2]
         raise BuilderException(rule.ctx, rule.line,
-                               '{}: {}'.format(e.__class__.__name__, e))
+                               '{}: {}'.format(e.__class__.__name__, e),
+                               cause=tb)
 
 
 class ParserSelector(object):
@@ -1771,9 +1902,10 @@ class BuilderBase(object):
                         value = eval(prule.value, idmap)
                         ctx[prule.name] = value
                 except Exception as e:
+                    tb = sys.exc_info()[2]
                     raise BuilderException(
                         prule.ctx, prule.line,
-                        '{}: {}'.format(e.__class__.__name__, e))
+                        '{}: {}'.format(e.__class__.__name__, e), cause=tb)
 
                 # create the template with an explicit ctx
                 child = cls(**ctx)
@@ -1820,9 +1952,10 @@ class BuilderBase(object):
                     setattr(widget_set, key, value)
         except Exception as e:
             if rule is not None:
+                tb = sys.exc_info()[2]
                 raise BuilderException(rule.ctx, rule.line,
                                        '{}: {}'.format(e.__class__.__name__,
-                                                       e))
+                                                       e), cause=tb)
             raise e
 
         # build handlers
@@ -1838,16 +1971,18 @@ class BuilderBase(object):
                     idmap = copy(global_idmap)
                     idmap.update(rctx['ids'])
                     idmap['self'] = widget_set.proxy_ref
-                    widget_set.bind(**{key: partial(custom_callback,
-                                                    crule, idmap)})
+                    if not widget_set.fast_bind(key, custom_callback, crule,
+                                                idmap):
+                        raise AttributeError(key)
                     #hack for on_parent
                     if crule.name == 'on_parent':
                         Factory.Widget.parent.dispatch(widget_set.__self__)
         except Exception as e:
             if crule is not None:
+                tb = sys.exc_info()[2]
                 raise BuilderException(
                     crule.ctx, crule.line,
-                    '{}: {}'.format(e.__class__.__name__, e))
+                    '{}: {}'.format(e.__class__.__name__, e), cause=tb)
             raise e
 
         # rule finished, forget it
@@ -1875,13 +2010,22 @@ class BuilderBase(object):
 
         .. versionadded:: 1.7.0
         '''
-        l = set(_delayed_calls)
-        del _delayed_calls[:]
-        for func in l:
+        global _delayed_start
+        next_args = _delayed_start
+        if next_args is None:
+            return
+
+        while next_args is not StopIteration:
+            # is this try/except still needed? yes, in case widget died in this
+            # frame after the call was scheduled
             try:
-                func(None, None)
+                call_fn(next_args[:-1], None, None)
             except ReferenceError:
-                continue
+                pass
+            args = next_args
+            next_args = args[-1]
+            args[-1] = None
+        _delayed_start = None
 
     def unbind_widget(self, uid):
         '''(internal) Unbind all the handlers created by the rules of the
@@ -1893,12 +2037,15 @@ class BuilderBase(object):
         '''
         if uid not in _handlers:
             return
-        for f, k, fn in _handlers[uid]:
-            try:
-                f.unbind(**{k: fn})
-            except ReferenceError:
-                # proxy widget is already gone, that's cool :)
-                pass
+        for callbacks in _handlers[uid]:
+            for f, k, fn, largs in callbacks:
+                if fn is None:  # it's not a kivy prop.
+                    continue
+                try:
+                    f.fast_unbind(k, fn, *largs)
+                except ReferenceError:
+                    # proxy widget is already gone, that's cool :)
+                    pass
         del _handlers[uid]
 
     def _build_canvas(self, canvas, widget, rule, rootrule):
@@ -1926,9 +2073,10 @@ class BuilderBase(object):
                             key, value, prule, idmap, True)
                     setattr(instr, key, value)
             except Exception as e:
+                tb = sys.exc_info()[2]
                 raise BuilderException(
                     prule.ctx, prule.line,
-                    '{}: {}'.format(e.__class__.__name__, e))
+                    '{}: {}'.format(e.__class__.__name__, e), cause=tb)
 
 #: Main instance of a :class:`BuilderBase`.
 Builder = register_context('Builder', BuilderBase)

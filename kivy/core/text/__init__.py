@@ -13,7 +13,7 @@ accuracy of text rendering may vary.
     width <= 1.
 
 This is the backend layer for getting text out of different text providers,
-you should only be using this directly if your needs aren't fulfilled by
+you should only be using this directly if your needs aren't fulfilled by the
 :class:`~kivy.uix.label.Label`.
 
 Usage example::
@@ -24,9 +24,9 @@ Usage example::
     ...
     my_label = CoreLabel()
     my_label.text = 'hello'
-    # label is usully not drawn till absolutely needed, force it to draw.
+    # the label is usually not drawn until needed, so force it to draw.
     my_label.refresh()
-    # Now access the texture of the label and use it where ever,
+    # Now access the texture of the label and use it wherever and
     # however you may please.
     hello_texture = my_label.texture
 
@@ -105,10 +105,10 @@ class LabelBase(object):
             Whether each row of text has its leading and trailing spaces
             stripped. If `halign` is `justify` it is implicitly True.
 
-    .. versionchanged:: 1.8.1
+    .. versionchanged:: 1.9.0
         `strip`, `shorten_from`, and `split_str` were added.
 
-    .. versionchanged:: 1.8.1
+    .. versionchanged:: 1.9.0
         `padding_x` and `padding_y` has been fixed to work as expected.
         In the past, the text was padded by the negative of their values.
 
@@ -258,7 +258,7 @@ class LabelBase(object):
             returned function incorrect. You should only use this if you know
             what you're doing.
 
-        .. versionadded:: 1.8.1
+        .. versionadded:: 1.9.0
         '''
         return self.get_extents
 
@@ -540,7 +540,7 @@ class LabelBase(object):
             h = uh
         if h > 1 and w < 2:
             w = 2
-        return w, h
+        return int(w), int(h)
 
     def _texture_refresh(self, *l):
         self.refresh()
@@ -604,7 +604,7 @@ class LabelBase(object):
     def texture_1px(self):
         if LabelBase._texture_1px is None:
             tex = Texture.create(size=(1, 1), colorfmt='rgba')
-            tex.blit_buffer(b'\x00\x00\x00\x00')
+            tex.blit_buffer(b'\x00\x00\x00\x00', colorfmt='rgba')
             LabelBase._texture_1px = tex
         return LabelBase._texture_1px
 
@@ -664,6 +664,7 @@ class LabelBase(object):
 
 # Load the appropriate provider
 Label = core_select_lib('text', (
+    ('sdl2', 'text_sdl2', 'LabelSDL2'),
     ('pygame', 'text_pygame', 'LabelPygame'),
     ('sdlttf', 'text_sdlttf', 'LabelSDLttf'),
     ('pil', 'text_pil', 'LabelPIL'),

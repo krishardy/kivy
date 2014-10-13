@@ -140,6 +140,14 @@ class::
     ins.a = 5    # callback not called, because the value did not change
     ins.a = -1   # callback called
 
+.. note::
+
+    Property objects live at the class level and manage the values attached
+    to instances. Re-assigning at class level will remove the Property. For
+    example, continuing with the code above, `MyClass.a = 5` replaces
+    the property object with a simple int.
+
+
 Observe using 'on_<propname>'
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -180,6 +188,10 @@ new object. For example::
 When clicking on the button, although the label object property has changed
 to the second widget, the button text will not change because it is bound to
 the text property of the first label directly.
+
+In `1.9.0`, the ``rebind`` option has been introduced that will allow the
+automatic updating of the ``text`` when ``label`` is changed, provided it
+was enabled. See :class:`ObjectProperty`.
 '''
 
 __all__ = ('Property',
@@ -189,6 +201,7 @@ __all__ = ('Property',
            'DictProperty', 'VariableListProperty', 'ConfigParserProperty')
 
 include "graphics/config.pxi"
+
 
 from weakref import ref
 import collections
@@ -294,14 +307,13 @@ cdef class Property:
         if 'errorhandler' in kw and not callable(self.errorhandler):
             raise ValueError('errorhandler %s not callable' % self.errorhandler)
 
-
     property name:
         def __get__(self):
             return self._name
 
     cdef init_storage(self, EventDispatcher obj, PropertyStorage storage):
         storage.value = self.convert(obj, self.defaultvalue)
-        storage.observers = []
+        storage.observers = EventObservers()
 
     cpdef link(self, EventDispatcher obj, str name):
         '''Link the instance with its real name.
@@ -322,7 +334,11 @@ cdef class Property:
         used in `Widget.__new__`. The link function is also used to create the
         storage space of the property for this specific widget instance.
         '''
-        cdef PropertyStorage d = PropertyStorage()
+        cdef PropertyStorage d
+        if self._name != '' and name != self._name:
+            d = obj.__storage.get(self._name, PropertyStorage())
+        else:
+            d = PropertyStorage()
         self._name = name
         obj.__storage[name] = d
         self.init_storage(obj, d)
@@ -334,16 +350,29 @@ cdef class Property:
         '''Add a new observer to be called only when the value is changed.
         '''
         cdef PropertyStorage ps = obj.__storage[self._name]
-        if observer not in ps.observers:
-            ps.observers.append(observer)
+        ps.observers.bind(observer)
+
+    cpdef fast_bind(self, EventDispatcher obj, observer, tuple largs=(), dict kwargs={}):
+        '''Similar to bind, except it doesn't check if the observer already
+        exists. It also expands and forwards largs and kwargs to the callback.
+        fast_unbind should be called when unbinding.
+        '''
+        cdef PropertyStorage ps = obj.__storage[self._name]
+        ps.observers.fast_bind(observer, largs, kwargs, 0)
 
     cpdef unbind(self, EventDispatcher obj, observer):
         '''Remove the observer from our widget observer list.
         '''
         cdef PropertyStorage ps = obj.__storage[self._name]
-        for item in ps.observers[:]:
-            if item == observer:
-                ps.observers.remove(item)
+        ps.observers.unbind(observer, 0, 0)
+
+    cpdef fast_unbind(self, EventDispatcher obj, observer, tuple largs=(), dict kwargs={}):
+        '''Remove the observer from our widget observer list bound with
+        fast_bind. It removes the first match it finds, as opposed to unbind
+        which searches for all matches.
+        '''
+        cdef PropertyStorage ps = obj.__storage[self._name]
+        ps.observers.fast_unbind(observer, largs, kwargs)
 
     def __set__(self, EventDispatcher obj, val):
         self.set(obj, val)
@@ -429,10 +458,7 @@ cdef class Property:
 
         '''
         cdef PropertyStorage ps = obj.__storage[self._name]
-        if len(ps.observers):
-            value = ps.value
-            for observer in ps.observers:
-                observer(obj, value)
+        ps.observers.dispatch(obj, ps.value, None, None, 0)
 
 
 cdef class NumericProperty(Property):
@@ -607,6 +633,22 @@ cdef class ListProperty(Property):
         `default`: list, defaults to []
             Specifies the default value of the property.
 
+    .. warning::
+
+        When assigning a list to a :class:`ListProperty`, the list stored in
+        the property is a copy of the list and not the original list. This can
+        be demonstrated with the following example::
+
+            >>> class MyWidget(Widget):
+            >>>     my_list = ListProperty([])
+
+            >>> widget = MyWidget()
+            >>> my_list = widget.my_list = [1, 5, 7]
+            >>> print my_list is widget.my_list
+            False
+            >>> my_list.append(10)
+            >>> print(my_list, widget.my_list)
+            [1, 5, 7, 10], [1, 5, 7]
     '''
     def __init__(self, defaultvalue=None, **kw):
         defaultvalue = defaultvalue or []
@@ -766,11 +808,8 @@ class ObservableDict(dict):
         try:
             return self._weak_return(self.__getitem__(attr))
         except KeyError:
-            try:
-                return self._weak_return(
-                                super(ObservableDict, self).__getattr__(attr))
-            except AttributeError:
-                raise KeyError(attr)
+            return self._weak_return(
+                            super(ObservableDict, self).__getattr__(attr))
 
     def __setattr__(self, attr, value):
         if attr in ('prop', 'obj'):
@@ -820,12 +859,23 @@ cdef class DictProperty(Property):
     :Parameters:
         `default`: dict, defaults to None
             Specifies the default value of the property.
+        `rebind`: bool, defaults to False
+            See :class:`ObjectProperty` for details.
 
+    .. versionchanged:: 1.9.0
+        `rebind` has been introduced.
+
+    .. warning::
+
+        Similar to :class:`ListProperty`, when assigning a dict to a
+        :class:`DictProperty`, the dict stored in the property is a copy of the
+        dict and not the original dict. See :class:`ListProperty` for details.
     '''
-    def __init__(self, defaultvalue=None, **kw):
+    def __init__(self, defaultvalue=None, rebind=False, **kw):
         defaultvalue = defaultvalue or {}
 
         super(DictProperty, self).__init__(defaultvalue, **kw)
+        self.rebind = rebind
 
     cpdef link(self, EventDispatcher obj, str name):
         Property.link(self, obj, name)
@@ -851,21 +901,48 @@ cdef class ObjectProperty(Property):
     :Parameters:
         `default`: object type
             Specifies the default value of the property.
+        `rebind`: bool, defaults to False
+            Whether kv rules using this object as an intermediate attribute
+            in a kv rule, will update the bound property when this object
+            changes.
+
+            That is the standard behavior is that if there's a kv rule
+            ``text: self.a.b.c.d``, where ``a``, ``b``, and ``c`` are
+            properties with ``rebind`` ``False`` and ``d`` is a
+            :class:`StringProperty`. Then when the rule is applied, ``text``
+            becomes bound only to ``d``. If ``a``, ``b``, or ``c`` change,
+            ``text`` still remains bound to ``d``. Furthermore, if any of them
+            were ``None`` when the rule was initially evaluated, e.g. ``b`` was
+            ``None``; then ``text`` is bound to ``b`` and will not become bound
+            to ``d`` even when ``b`` is changed to not be ``None``.
+
+            By setting ``rebind`` to ``True``, however, the rule will be
+            re-evaluated and all the properties rebound when that intermediate
+            property changes. E.g. in the example above, whenever ``b`` changes
+            or becomes not ``None`` if it was ``None`` before, ``text`` is
+            evaluated again and becomes rebound to ``d``. The overall result is
+            that ``text`` is now bound to all the properties among ``a``,
+            ``b``, or ``c`` that have ``rebind`` set to ``True``.
         `\*\*kwargs`: a list of keyword arguments
-            If kwargs includes a `baseclass` argument, this value will
-            be used for validation: `isinstance(value, kwargs['baseclass'])`.
+            `baseclass`
+                If kwargs includes a `baseclass` argument, this value will be
+                used for validation: `isinstance(value, kwargs['baseclass'])`.
 
     .. warning::
 
         To mark the property as changed, you must reassign a new python object.
 
+    .. versionchanged:: 1.9.0
+        `rebind` has been introduced.
+
     .. versionchanged:: 1.7.0
 
         `baseclass` parameter added.
     '''
-    def __init__(self, defaultvalue=None, **kw):
+    def __init__(self, defaultvalue=None, rebind=False, **kw):
         self.baseclass = kw.get('baseclass', object)
         super(ObjectProperty, self).__init__(defaultvalue, **kw)
+        self.rebind = rebind
 
     cdef check(self, EventDispatcher obj, value):
         if Property.check(self, obj, value):
@@ -1097,6 +1174,12 @@ cdef class OptionProperty(Property):
         `\*\*kwargs`: a list of keyword arguments
             Should include an `options` parameter specifying a list (not tuple)
             of valid options.
+
+    For example::
+
+        class MyWidget(Widget):
+            state = OptionProperty("None", options=["On", "Off", "None"])
+
     '''
     def __cinit__(self):
         self.options = []
@@ -1148,6 +1231,14 @@ cdef class ReferenceListProperty(Property):
     `pos`, it will automatically change the values of `x` and `y` accordingly.
     If you read the value of `pos`, it will return a tuple with the values of
     `x` and `y`.
+
+    For example::
+
+        class MyWidget(EventDispatcher):
+            x = NumericProperty(0)
+            y = NumericProperty(0)
+            pos = ReferenceListProperty(x, y)
+
     '''
     def __cinit__(self):
         self.properties = list()
@@ -1171,7 +1262,7 @@ cdef class ReferenceListProperty(Property):
         cdef Property prop
         Property.link_deps(self, obj, name)
         for prop in self.properties:
-            prop.bind(obj, self.trigger_change)
+            prop.fast_bind(obj, self.trigger_change)
 
     cpdef trigger_change(self, EventDispatcher obj, value):
         cdef PropertyStorage ps = obj.__storage[self._name]
@@ -1276,12 +1367,19 @@ cdef class AliasProperty(Property):
         `getter`: function
             Function to use as a property getter
         `setter`: function
-            Function to use as a property setter
+            Function to use as a property setter. Properties listening to the
+            alias property won't be updated when the property is set (e.g.
+            `right = 10`), unless the `setter` returns `True`.
         `bind`: list/tuple
             Properties to observe for changes, as property name strings
         `cache`: boolean
             If True, the value will be cached, until one of the binded elements
             will changes
+        `rebind`: bool, defaults to False
+            See :class:`ObjectProperty` for details.
+
+    .. versionchanged:: 1.9.0
+        `rebind` has been introduced.
 
     .. versionchanged:: 1.4.0
         Parameter `cache` added.
@@ -1292,14 +1390,18 @@ cdef class AliasProperty(Property):
         self.use_cache = 0
         self.bind_objects = list()
 
-    def __init__(self, getter, setter, **kwargs):
+    def __init__(self, getter, setter=None, rebind=False, **kwargs):
         Property.__init__(self, None, **kwargs)
         self.getter = getter
-        self.setter = setter
+        self.setter = setter or self.__read_only
+        self.rebind = rebind
         v = kwargs.get('bind')
         self.bind_objects = list(v) if v is not None else []
         if kwargs.get('cache'):
             self.use_cache = 1
+
+    def __read_only(self, _obj, _value):
+        raise AttributeError('property is read-only')
 
     cdef init_storage(self, EventDispatcher obj, PropertyStorage storage):
         Property.init_storage(self, obj, storage)
@@ -1311,7 +1413,7 @@ cdef class AliasProperty(Property):
         cdef Property oprop
         for prop in self.bind_objects:
             oprop = getattr(obj.__class__, prop)
-            oprop.bind(obj, self.trigger_change)
+            oprop.fast_bind(obj, self.trigger_change)
 
     cpdef trigger_change(self, EventDispatcher obj, value):
         cdef PropertyStorage ps = obj.__storage[self._name]
@@ -1586,7 +1688,7 @@ cdef class ConfigParserProperty(Property):
                 `errorhandler` will be used if provided or a `ValueError` is
                 raised.
 
-    .. versionadded:: 1.8.1
+    .. versionadded:: 1.9.0
     '''
 
     def __cinit__(self):

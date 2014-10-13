@@ -1,8 +1,8 @@
-from kivy._event cimport EventDispatcher
+from kivy._event cimport EventDispatcher, EventObservers
 
 cdef class PropertyStorage:
     cdef object value
-    cdef list observers
+    cdef EventObservers observers
     cdef object numeric_fmt
     cdef long bnum_min
     cdef long bnum_max
@@ -28,7 +28,9 @@ cdef class Property:
     cpdef link(self, EventDispatcher obj, str name)
     cpdef link_deps(self, EventDispatcher obj, str name)
     cpdef bind(self, EventDispatcher obj, observer)
+    cpdef fast_bind(self, EventDispatcher obj, observer, tuple largs=*, dict kwargs=*)
     cpdef unbind(self, EventDispatcher obj, observer)
+    cpdef fast_unbind(self, EventDispatcher obj, observer, tuple largs=*, dict kwargs=*)
     cdef compare_value(self, a, b)
     cpdef set(self, EventDispatcher obj, value)
     cpdef get(self, EventDispatcher obj)
@@ -47,10 +49,11 @@ cdef class ListProperty(Property):
     pass
 
 cdef class DictProperty(Property):
-    pass
+    cdef public int rebind
 
 cdef class ObjectProperty(Property):
     cdef object baseclass
+    cdef public int rebind
 
 cdef class BooleanProperty(Property):
     pass
@@ -76,6 +79,7 @@ cdef class AliasProperty(Property):
     cdef object setter
     cdef list bind_objects
     cdef int use_cache
+    cdef public int rebind
     cpdef trigger_change(self, EventDispatcher obj, value)
 
 cdef class VariableListProperty(Property):

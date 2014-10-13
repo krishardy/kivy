@@ -153,7 +153,13 @@ def install_twisted_reactor(**kwargs):
     any signals unless you set the 'installSignalHandlers' keyword argument
     to 1 explicitly. This is done to allow kivy to handle the signals as
     usual unless you specifically want the twisted reactor to handle the
-    signals (e.g. SIGINT).'''
+    signals (e.g. SIGINT).
+
+    .. note::
+        Twisted is not included in iOS build by default. To use it on iOS,
+        put the twisted distribution (and zope.interface dependency) in your
+        application directory.
+    '''
     import twisted
 
     # prevent installing more than once
@@ -235,7 +241,7 @@ def uninstall_twisted_reactor():
     '''Uninstalls the Kivy's threaded Twisted Reactor. No more Twisted tasks will
     run after this got called. Use this to clean the `twisted.internet.reactor`
 
-    .. versionadded:: 1.8.1
+    .. versionadded:: 1.9.0
     '''
 
     import twisted

@@ -23,7 +23,9 @@ The syntax to create a request::
 Only the first argument is mandatory: the rest are optional.
 By default, a "GET" request will be sent. If the :attr:`UrlRequest.req_body` is
 not None, a "POST" request will be sent. It's up to you to adjust
-:attr:`UrlRequest.req_headers` to suite your requirements.
+:attr:`UrlRequest.req_headers` to suit your requirements and the response
+to the request will be accessible as the parameter called "result" on
+the callback function of the on_success event.
 
 
 Example of fetching weather in Paris::
@@ -138,7 +140,7 @@ class UrlRequest(Thread):
             If set, the result of the UrlRequest will be written to this path
             instead of in memory.
 
-    .. versionadded:: 1.8.0
+    .. versionchanged:: 1.8.0
 
         Parameter `decode` added.
         Parameter `file_path` added.
@@ -500,7 +502,7 @@ if __name__ == '__main__':
         pprint('Got an error:')
         pprint(error)
 
-    req = UrlRequest('http://api.twitter.com/1/trends.json',
+    req = UrlRequest('http://en.wikipedia.org/w/api.php?format=json&action=query&titles=Kivy&prop=revisions&rvprop=content',
                      on_success, on_error)
     while not req.is_finished:
         sleep(1)

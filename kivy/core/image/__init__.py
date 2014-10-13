@@ -40,13 +40,14 @@ class ImageData(object):
     The container will always have at least the mipmap level 0.
     '''
 
-    __slots__ = ('fmt', 'mipmaps', 'source', 'flip_vertical')
+    __slots__ = ('fmt', 'mipmaps', 'source', 'flip_vertical', 'source_image')
     _supported_fmts = ('rgb', 'rgba', 'bgr', 'bgra', 's3tc_dxt1', 's3tc_dxt3',
                        's3tc_dxt5', 'pvrtc_rgb2', 'pvrtc_rgb4', 'pvrtc_rgba2',
                        'pvrtc_rgba4', 'etc1_rgb8')
 
     def __init__(self, width, height, fmt, data, source=None,
-                 flip_vertical=True):
+                 flip_vertical=True, source_image=None,
+                 rowlength=0):
         assert fmt in ImageData._supported_fmts
 
         #: Decoded image format, one of a available texture format
@@ -54,7 +55,7 @@ class ImageData(object):
 
         #: Data for each mipmap.
         self.mipmaps = {}
-        self.add_mipmap(0, width, height, data)
+        self.add_mipmap(0, width, height, data, rowlength)
 
         #: Image source, if available
         self.source = source
@@ -62,10 +63,14 @@ class ImageData(object):
         #: Indicate if the texture will need to be vertically flipped
         self.flip_vertical = flip_vertical
 
+        # the original image, which we might need to save if it is a memoryview
+        self.source_image = source_image
+
     def release_data(self):
         mm = self.mipmaps
         for item in mm.values():
             item[2] = None
+            self.source_image = None
 
     @property
     def width(self):
@@ -89,6 +94,15 @@ class ImageData(object):
         return self.mipmaps[0][2]
 
     @property
+    def rowlength(self):
+        '''Image rowlength.
+        (If the image is mipmapped, it will use the level 0)
+
+        .. versionadded:: 1.9.0
+        '''
+        return self.mipmaps[0][3]
+
+    @property
     def size(self):
         '''Image (width, height) in pixels.
         (If the image is mipmapped, it will use the level 0)
@@ -106,12 +120,12 @@ class ImageData(object):
                     self.width, self.height, self.fmt,
                     self.source, len(self.mipmaps)))
 
-    def add_mipmap(self, level, width, height, data):
+    def add_mipmap(self, level, width, height, data, rowlength):
         '''Add a image for a specific mipmap level.
 
         .. versionadded:: 1.0.7
         '''
-        self.mipmaps[level] = [int(width), int(height), data]
+        self.mipmaps[level] = [int(width), int(height), data, rowlength]
 
     def get_mipmap(self, level):
         '''Get the mipmap image at a specific level if it exists
@@ -119,12 +133,12 @@ class ImageData(object):
         .. versionadded:: 1.0.7
         '''
         if level == 0:
-            return (self.width, self.height, self.data)
+            return (self.width, self.height, self.data, self.rowlength)
         assert(level < len(self.mipmaps))
         return self.mipmaps[level]
 
     def iterate_mipmaps(self):
-        '''Iterate over all mipmap images available
+        '''Iterate over all mipmap images available.
 
         .. versionadded:: 1.0.7
         '''
@@ -133,7 +147,7 @@ class ImageData(object):
             item = mm.get(x, None)
             if item is None:
                 raise Exception('Invalid mipmap level, found empty one')
-            yield x, item[0], item[1], item[2]
+            yield x, item[0], item[1], item[2], item[3]
 
 
 class ImageLoaderBase(object):
@@ -378,12 +392,12 @@ class ImageLoader(object):
 class Image(EventDispatcher):
     '''Load an image and store the size and texture.
 
-    .. versionadded:: 1.0.7
+    .. versionchanged:: 1.0.7
 
         `mipmap` attribute has been added. The `texture_mipmap` and
         `texture_rectangle` have been deleted.
 
-    .. versionadded:: 1.0.8
+    .. versionchanged:: 1.0.8
 
         An Image widget can change its texture. A new event 'on_texture' has
         been introduced. New methods for handling sequenced animation have been
@@ -444,9 +458,6 @@ class Image(EventDispatcher):
             self.filename = arg
         else:
             raise Exception('Unable to load image type {0!r}'.format(arg))
-
-        # check if the image hase sequences for animation in it
-        self._img_iterate()
 
     def remove_from_cache(self):
         '''Remove the Image from cache. This facilitates re-loading of
@@ -687,6 +698,9 @@ class Image(EventDispatcher):
         been heavilly tested so some providers might break when using it.
         Any other extensions are not officially supported.
 
+        The flipped parameter flips the saved image vertically, and
+        defaults to True.
+
         Example::
 
             # Save an core image object
@@ -798,7 +812,9 @@ if platform in ('macosx', 'ios'):
 image_libs += [
     ('tex', 'img_tex'),
     ('dds', 'img_dds'),
+    ('sdl2', 'img_sdl2'),
     ('pygame', 'img_pygame'),
+    ('ffpy', 'img_ffpyplayer'),
     ('pil', 'img_pil'),
     ('gif', 'img_gif')]
 libs_loaded = core_register_libs('image', image_libs)
